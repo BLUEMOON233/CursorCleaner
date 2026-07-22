@@ -90,7 +90,7 @@ pub fn is_link_like(metadata: &Metadata) -> bool {
     {
         use std::os::windows::fs::MetadataExt;
         const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x0400;
-        return metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0;
+        metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0
     }
     #[cfg(not(target_os = "windows"))]
     false
@@ -201,7 +201,10 @@ async fn macos_database_holders(path: &std::path::Path) -> Result<Vec<String>, S
         Ok(holders)
     }
     #[cfg(not(target_os = "macos"))]
-    Err("macOS 文件占用检查不可用".into())
+    {
+        let _ = path;
+        Err("macOS 文件占用检查不可用".into())
+    }
 }
 
 fn windows_database_lock(path: &std::path::Path) -> Result<Vec<String>, String> {
