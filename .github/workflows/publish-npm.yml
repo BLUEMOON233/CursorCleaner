@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: Existing release tag, for example v0.1.0-alpha.2
+        description: Existing release tag, for example v0.1.0
         required: true
         type: string
 
@@ -36,7 +36,7 @@ jobs:
           RELEASE_TAG: ${{ inputs.tag }}
         shell: bash
         run: |
-          [[ "${RELEASE_TAG}" =~ ^v[0-9]+\.[0-9]+\.[0-9]+-[0-9A-Za-z.-]+$ ]]
+          [[ "${RELEASE_TAG}" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]]
           test "$(git rev-parse HEAD)" = "$(git rev-parse "refs/tags/${RELEASE_TAG}^{commit}")"
           mkdir -p release npm/vendor/darwin-arm64 npm/vendor/darwin-x64 npm/vendor/win32-x64
           gh release download "${RELEASE_TAG}" --dir release
@@ -67,10 +67,17 @@ jobs:
           test "${RELEASE_TAG}" = "v$(node -p "require('./' + process.argv[1] + '/package.json').version" "${package_root}")"
           node --test npm/test/cli.test.js
           (cd npm && npm pack --dry-run)
-      - name: Publish prerelease
+      - name: Publish package
         env:
           # Required only to bootstrap the package before npm trusted publishing
           # can be configured. Remove the secret after OIDC succeeds.
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
         shell: bash
-        run: npm publish "$(find release -maxdepth 1 -type f -name '*.tgz')" --tag next --provenance --access public
+        run: |
+          package_version="$(node -p "require('./npm/package.json').version")"
+          if [[ "${package_version}" == *-* ]]; then
+            npm_tag="next"
+          else
+            npm_tag="latest"
+          fi
+          npm publish "$(find release -maxdepth 1 -type f -name '*.tgz')" --tag "${npm_tag}" --provenance --access public

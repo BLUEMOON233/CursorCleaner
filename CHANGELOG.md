@@ -4,6 +4,13 @@
 
 ## [Unreleased]
 
+## [0.1.0] - 2026-07-23
+
+### Changed
+
+- 将经过 macOS 与 Windows 实机验证的 `0.1.0-alpha.2` 提升为首个稳定版本。
+- GitHub Release 与 npm 工作流现在会将稳定版本发布到 npm `latest`，预发布版本发布到 `next`。
+
 ## [0.1.0-alpha.2] - 2026-07-23
 
 ### Added

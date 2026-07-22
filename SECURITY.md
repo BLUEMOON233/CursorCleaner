@@ -2,7 +2,7 @@
 
 ## Supported versions
 
-当前仅维护最新的预发布版本。
+当前维护最新稳定版本；必要时也会修复最新预发布版本中的安全问题。
 
 ## Reporting a vulnerability
 

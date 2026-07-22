@@ -53,7 +53,7 @@ Windows 首版实机测试步骤与允许反馈的脱敏字段见 [`docs/WINDOWS
 发布 npm 包后，用户可以一行启动：
 
 ```bash
-npx --yes @bluemoon233/cursor-cleaner@0.1.0-alpha.2
+npx --yes @bluemoon233/cursor-cleaner@0.1.0
 ```
 
 npm 包只是薄启动器：根据 `process.platform` 和 `process.arch` 运行包内原生二进制，不执行 `postinstall`、不联网下载，也不写入 Application Support。发布前请按 [`npm/README.md`](npm/README.md) 设置你实际拥有的 npm 包名。
@@ -73,8 +73,8 @@ cargo build --release -p cursor-cleaner
 
 1. 将 `Cargo.toml`、`npm/package.json` 与 Git tag 版本保持一致。
 2. 确认 npm 包名为 `@bluemoon233/cursor-cleaner`，并在 GitHub 仓库变量 `NPM_PACKAGE_NAME` 中使用相同值。
-3. 推送形如 `v0.1.0-alpha.2` 的 tag；Release 工作流会构建三个原生压缩包、校验和与 npm tarball 草稿产物。
-4. 小范围验证 GitHub prerelease 后，再手动运行 npm 发布工作流。
+3. 推送形如 `v0.1.0` 或 `v0.1.1-alpha.1` 的 tag；Release 工作流会构建三个原生压缩包、校验和与 npm tarball。
+4. 验证 GitHub Release 后，再手动运行 npm 发布工作流；稳定版发布到 `latest`，预发布版发布到 `next`。
 
 完整的首发门禁和人工确认项见 [`RELEASE_CHECKLIST.md`](RELEASE_CHECKLIST.md)，版本变更见 [`CHANGELOG.md`](CHANGELOG.md)。
 
