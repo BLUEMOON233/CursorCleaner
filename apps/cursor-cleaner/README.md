@@ -3,10 +3,10 @@
 `cursor-cleaner` 是面向 macOS 与 Windows 10/11 x64 的 Cursor 本地对话管理 TUI。它默认只读访问数据，写操作只支持已验证的本地结构：
 
 - 可选的 `conversation-search.db`：`user_version=7`，包含 `conversations`、`conversation_fts`、`conversation_search_candidates`；
-- `state.vscdb`：`user_version=1`，包含 `ItemTable`、`cursorDiskKV`、`composerHeaders`；
+- `state.vscdb`：`user_version=1`，包含 `ItemTable`、`cursorDiskKV`，并可能包含 `composerHeaders`；
 - `~/.cursor/projects/*/agent-transcripts/<conversation-id>/`。
 
-macOS 通常使用搜索库与状态库双库模式；已验证的 Windows 数据可能只有 `state.vscdb`，此时程序从 `composerHeaders` 和 `cursorDiskKV` 加载记录并执行单库事务。未知 schema 只允许诊断。程序不会写入真实项目目录。
+macOS 通常使用搜索库与状态库双库模式；已验证的 Windows 数据可能只有 `state.vscdb`。单库模式既支持通过 `composerHeaders` 加载，也支持仅通过 `cursorDiskKV` 的 `composerData:<id>` 加载。NULL 或无效的 `composerData` 可只读显示，但不会生成清理计划。未知 schema 只允许诊断。程序不会写入真实项目目录。
 
 ## 运行
 

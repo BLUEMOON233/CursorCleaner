@@ -195,6 +195,177 @@ function Get-RealDatabasePath {
     return $null
 }
 
+function Convert-ToInt64 {
+    param([AllowNull()][string]$Value)
+    if ([string]::IsNullOrWhiteSpace($Value)) { return [int64]0 }
+    return [int64]$Value
+}
+
+function Read-KvDiagnosticsFromCopy {
+    param([string]$DatabasePath)
+
+    try {
+        $tableRows = [WinSqliteProbe]::Query(
+            $DatabasePath,
+            @'
+SELECT 'ItemTable',
+       COUNT(*),
+       SUM(CASE WHEN key IS NULL THEN 1 ELSE 0 END),
+       SUM(CASE WHEN value IS NULL THEN 1 ELSE 0 END),
+       SUM(CASE WHEN typeof(value) = 'text' THEN 1 ELSE 0 END),
+       SUM(CASE WHEN typeof(value) = 'blob' THEN 1 ELSE 0 END),
+       SUM(CASE WHEN typeof(value) IN ('integer', 'real') THEN 1 ELSE 0 END)
+FROM ItemTable
+UNION ALL
+SELECT 'cursorDiskKV',
+       COUNT(*),
+       SUM(CASE WHEN key IS NULL THEN 1 ELSE 0 END),
+       SUM(CASE WHEN value IS NULL THEN 1 ELSE 0 END),
+       SUM(CASE WHEN typeof(value) = 'text' THEN 1 ELSE 0 END),
+       SUM(CASE WHEN typeof(value) = 'blob' THEN 1 ELSE 0 END),
+       SUM(CASE WHEN typeof(value) IN ('integer', 'real') THEN 1 ELSE 0 END)
+FROM cursorDiskKV
+ORDER BY 1
+'@
+        )
+        $tables = @($tableRows | ForEach-Object {
+            [ordered]@{
+                table = [string]$_[0]
+                row_count = Convert-ToInt64 $_[1]
+                null_key_count = Convert-ToInt64 $_[2]
+                null_value_count = Convert-ToInt64 $_[3]
+                text_value_count = Convert-ToInt64 $_[4]
+                blob_value_count = Convert-ToInt64 $_[5]
+                numeric_value_count = Convert-ToInt64 $_[6]
+            }
+        })
+
+        $cursorCategoryRows = [WinSqliteProbe]::Query(
+            $DatabasePath,
+            @'
+SELECT category, COUNT(*)
+FROM (
+    SELECT CASE
+        WHEN substr(key, 1, length('composerData:')) = 'composerData:'
+            THEN 'composerData:<id>'
+        WHEN substr(key, 1, length('composerVirtualRowHeights:')) = 'composerVirtualRowHeights:'
+            THEN 'composerVirtualRowHeights:<id>'
+        WHEN substr(key, 1, length('bubbleId:')) = 'bubbleId:'
+            THEN 'bubbleId:<id>:<suffix>'
+        WHEN substr(key, 1, length('checkpointId:')) = 'checkpointId:'
+            THEN 'checkpointId:<id>:<suffix>'
+        WHEN substr(key, 1, length('codeBlockPartialInlineDiffFates:')) = 'codeBlockPartialInlineDiffFates:'
+            THEN 'codeBlockPartialInlineDiffFates:<id>:<suffix>'
+        WHEN substr(key, 1, length('ofsContent:')) = 'ofsContent:'
+            THEN 'ofsContent:<id>:<suffix>'
+        ELSE 'other'
+    END AS category
+    FROM cursorDiskKV
+)
+GROUP BY category
+ORDER BY category
+'@
+        )
+        $cursorCategories = @($cursorCategoryRows | ForEach-Object {
+            [ordered]@{ category = [string]$_[0]; count = Convert-ToInt64 $_[1] }
+        })
+
+        $itemCategoryRows = [WinSqliteProbe]::Query(
+            $DatabasePath,
+            @'
+SELECT category, COUNT(*)
+FROM (
+    SELECT CASE
+        WHEN substr(key, 1, length('glass/cursor.editorPanelVisibility.agent/')) = 'glass/cursor.editorPanelVisibility.agent/'
+            THEN 'glass/cursor.editorPanelVisibility.agent/<id>'
+        WHEN substr(key, 1, length('cursor/glass.editorPanelFullscreen/')) = 'cursor/glass.editorPanelFullscreen/'
+            THEN 'cursor/glass.editorPanelFullscreen/<id>'
+        WHEN substr(key, 1, length('cursor/glass.tabs.v2/')) = 'cursor/glass.tabs.v2/'
+             AND key LIKE '%/state.json'
+            THEN 'cursor/glass.tabs.v2/<redacted>/<id>/state.json'
+        ELSE 'other'
+    END AS category
+    FROM ItemTable
+)
+GROUP BY category
+ORDER BY category
+'@
+        )
+        $itemCategories = @($itemCategoryRows | ForEach-Object {
+            [ordered]@{ category = [string]$_[0]; count = Convert-ToInt64 $_[1] }
+        })
+
+        try {
+            $composerRows = [WinSqliteProbe]::Query(
+                $DatabasePath,
+                @'
+WITH composer AS (
+    SELECT key, value, CAST(value AS TEXT) AS json_text
+    FROM cursorDiskKV
+    WHERE substr(key, 1, length('composerData:')) = 'composerData:'
+)
+SELECT COUNT(*),
+       SUM(CASE WHEN value IS NULL THEN 1 ELSE 0 END),
+       SUM(CASE WHEN json_valid(json_text) THEN 1 ELSE 0 END),
+       SUM(CASE WHEN json_valid(json_text) THEN CASE WHEN json_type(json_text) = 'object' THEN 1 ELSE 0 END ELSE 0 END),
+       SUM(CASE WHEN json_valid(json_text) THEN CASE WHEN json_type(json_text, '$.composerId') IS NOT NULL THEN 1 ELSE 0 END ELSE 0 END),
+       SUM(CASE WHEN json_valid(json_text) THEN CASE WHEN json_extract(json_text, '$.composerId') = substr(key, length('composerData:') + 1) THEN 1 ELSE 0 END ELSE 0 END),
+       SUM(CASE WHEN json_valid(json_text) THEN CASE WHEN json_type(json_text, '$.workspaceIdentifier') IS NOT NULL THEN 1 ELSE 0 END ELSE 0 END),
+       SUM(CASE WHEN json_valid(json_text) THEN CASE WHEN json_type(json_text, '$.title') IS NOT NULL OR json_type(json_text, '$.name') IS NOT NULL OR json_type(json_text, '$.composerTitle') IS NOT NULL THEN 1 ELSE 0 END ELSE 0 END),
+       SUM(CASE WHEN json_valid(json_text) THEN CASE WHEN json_type(json_text, '$.messages') IS NOT NULL THEN 1 ELSE 0 END ELSE 0 END),
+       SUM(CASE WHEN json_valid(json_text) THEN CASE WHEN json_type(json_text, '$.createdAt') IS NOT NULL THEN 1 ELSE 0 END ELSE 0 END),
+       SUM(CASE WHEN json_valid(json_text) THEN CASE WHEN json_type(json_text, '$.lastUpdatedAt') IS NOT NULL OR json_type(json_text, '$.updatedAt') IS NOT NULL THEN 1 ELSE 0 END ELSE 0 END),
+       SUM(CASE WHEN json_valid(json_text) THEN CASE WHEN json_type(json_text, '$.isArchived') IS NOT NULL THEN 1 ELSE 0 END ELSE 0 END),
+       SUM(CASE WHEN json_valid(json_text) THEN CASE WHEN json_type(json_text, '$.isSubagent') IS NOT NULL THEN 1 ELSE 0 END ELSE 0 END),
+       SUM(CASE WHEN json_valid(json_text) THEN CASE WHEN json_type(json_text, '$.subComposerIds') IS NOT NULL OR json_type(json_text, '$.subagentComposerIds') IS NOT NULL THEN 1 ELSE 0 END ELSE 0 END)
+FROM composer
+'@
+            )
+            $composer = $composerRows[0]
+            $composerDiagnostics = [ordered]@{
+                available = $true
+                row_count = Convert-ToInt64 $composer[0]
+                null_value_count = Convert-ToInt64 $composer[1]
+                valid_json_count = Convert-ToInt64 $composer[2]
+                json_object_count = Convert-ToInt64 $composer[3]
+                composer_id_field_count = Convert-ToInt64 $composer[4]
+                composer_id_matches_key_count = Convert-ToInt64 $composer[5]
+                workspace_identifier_field_count = Convert-ToInt64 $composer[6]
+                title_field_count = Convert-ToInt64 $composer[7]
+                messages_field_count = Convert-ToInt64 $composer[8]
+                created_at_field_count = Convert-ToInt64 $composer[9]
+                updated_at_field_count = Convert-ToInt64 $composer[10]
+                archived_field_count = Convert-ToInt64 $composer[11]
+                subagent_flag_field_count = Convert-ToInt64 $composer[12]
+                child_composer_ids_field_count = Convert-ToInt64 $composer[13]
+            }
+        }
+        catch {
+            $composerDiagnostics = [ordered]@{
+                available = $false
+                error = Redact-ErrorMessage $_.Exception.Message
+            }
+        }
+
+        return [ordered]@{
+            available = $true
+            privacy = "Aggregate counts only; no database row keys, IDs, titles, message bodies, or JSON values are included."
+            tables = $tables
+            key_categories = [ordered]@{
+                cursorDiskKV = $cursorCategories
+                ItemTable = $itemCategories
+            }
+            composer_data = $composerDiagnostics
+        }
+    }
+    catch {
+        return [ordered]@{
+            available = $false
+            error = Redact-ErrorMessage $_.Exception.Message
+        }
+    }
+}
+
 function Read-SqliteSchemaFromCopy {
     param(
         [string]$DatabasePath,
@@ -238,12 +409,22 @@ function Read-SqliteSchemaFromCopy {
                 columns = $columns
             }
         }
+        $tableNames = @($tableRows | ForEach-Object { [string]$_[0] })
+        if (($tableNames -contains "ItemTable") -and ($tableNames -contains "cursorDiskKV")) {
+            $kvDiagnostics = Read-KvDiagnosticsFromCopy $destination
+        } else {
+            $kvDiagnostics = [ordered]@{
+                available = $false
+                error = "ItemTable or cursorDiskKV is missing"
+            }
+        }
         return [ordered]@{
             available = $true
             user_version = [int]$userVersionRows[0][0]
             journal_mode = [string]$journalRows[0][0]
             quick_check = [string]$checkRows[0][0]
             tables = $tables
+            kv_diagnostics = $kvDiagnostics
         }
     }
     catch {
@@ -355,7 +536,7 @@ catch {
 }
 
 $cursorProcesses = @(Get-Process -ErrorAction SilentlyContinue |
-    Where-Object { $_.ProcessName -like "Cursor*" } |
+    Where-Object { $_.ProcessName -ieq "Cursor" } |
     ForEach-Object { [ordered]@{ name = $_.ProcessName; pid = $_.Id } })
 
 $cursorUserCandidates = @($CursorUserPath)
@@ -450,9 +631,9 @@ try {
     }
 
     $report = [ordered]@{
-        report_version = 2
+        report_version = 3
         generated_utc = [DateTime]::UtcNow.ToString("o")
-        privacy = "No conversation bodies, titles, keys, full workspace paths, or database files are included."
+        privacy = "No conversation bodies, titles, database row keys, IDs, full workspace paths, JSON values, or database files are included. Only aggregate counts and allowlisted field-presence counts are reported."
         operating_system = [ordered]@{
             description = [Runtime.InteropServices.RuntimeInformation]::OSDescription
             architecture = [Runtime.InteropServices.RuntimeInformation]::OSArchitecture.ToString()

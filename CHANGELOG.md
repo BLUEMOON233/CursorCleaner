@@ -2,7 +2,21 @@
 
 本项目的重要变更记录在此。版本号遵循 Semantic Versioning；预发布版本仍可能调整兼容性和本地数据处理策略。
 
-## [0.1.0-alpha.1] - Unreleased
+## [Unreleased]
+
+## [0.1.0-alpha.2] - 2026-07-23
+
+### Added
+
+- 支持缺少 `composerHeaders` 与 `conversation-search.db`、仅通过 `cursorDiskKV` 保存对话的 KV-only 单库布局。
+- Windows 脱敏诊断报告增加 KV 类型、已知键类别与允许字段的聚合计数，不输出真实键、ID 或内容。
+
+### Fixed
+
+- 单条 `composerData.value` 为 `NULL` 时不再中断全部记录的只读加载；该异常记录仍禁止清理。
+- Windows 诊断脚本不再把 `cursor-cleaner.exe` 误判为正在运行的 Cursor。
+
+## [0.1.0-alpha.1] - 2026-07-22
 
 ### Added
 

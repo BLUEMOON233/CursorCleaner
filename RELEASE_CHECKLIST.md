@@ -4,7 +4,7 @@
 
 - [ ] 用户已明确确认 GitHub 用户名/组织、目标仓库地址与 npm 包名；仓库内不再含发布占位符。
 - [ ] Cargo 与 npm 的 `repository`、`homepage`、`bugs` 信息指向目标公开仓库。
-- [ ] `Cargo.toml`、`npm/package.json`、Changelog 与 tag 均为 `0.1.0-alpha.1` / `v0.1.0-alpha.1`。
+- [ ] `Cargo.toml`、`npm/package.json`、Changelog 与 tag 均为 `0.1.0-alpha.2` / `v0.1.0-alpha.2`。
 - [ ] 首次 commit 的作者信息正确，提交内容仅来自本独立仓库。
 
 ## 隐私与安全
@@ -30,5 +30,5 @@
 - [ ] 创建第一次 Git commit。
 - [ ] 创建 GitHub 远程仓库并添加 `origin`。
 - [ ] 推送 `main`。
-- [ ] 创建并推送 `v0.1.0-alpha.1` tag，触发 GitHub prerelease。
+- [ ] 创建并推送 `v0.1.0-alpha.2` tag，触发 GitHub prerelease。
 - [ ] 首次 npm 发布；发布后配置并验证 trusted publisher，再删除并吊销 bootstrap token。

@@ -73,7 +73,16 @@ impl CursorStore {
         }
         check_columns(&state, "ItemTable", &["key", "value"], &mut problems)?;
         check_columns(&state, "cursorDiskKV", &["key", "value"], &mut problems)?;
-        check_columns(&state, "composerHeaders", HEADER_COLUMNS, &mut problems)?;
+        let has_headers = table_exists(&state, "composerHeaders")?;
+        if has_headers {
+            check_columns(&state, "composerHeaders", HEADER_COLUMNS, &mut problems)?;
+        } else if self.config.search_db.is_file() {
+            problems
+                .push("存在 conversation-search.db，但缺少 composerHeaders；此组合尚未验证".into());
+        } else {
+            diagnostics
+                .push("未发现 composerHeaders；使用已验证的 state.vscdb KV-only 单库模式".into());
+        }
 
         let search_version = if self.config.search_db.is_file() {
             let search = open_readonly(&self.config.search_db)?;
@@ -157,9 +166,10 @@ impl CursorStore {
                 .query_row(
                     "SELECT value FROM cursorDiskKV WHERE key=?1",
                     params![format!("composerData:{id}")],
-                    |row| value_bytes(row.get_ref(0)?),
+                    |row| optional_value_bytes(row.get_ref(0)?),
                 )
-                .optional()?;
+                .optional()?
+                .flatten();
             let payload = raw
                 .as_deref()
                 .and_then(|bytes| serde_json::from_slice::<Value>(bytes).ok());
@@ -167,7 +177,7 @@ impl CursorStore {
                 .query_row(
                     "SELECT workspaceId,value FROM composerHeaders WHERE composerId=?1",
                     params![id],
-                    |row| Ok((row.get(0)?, optional_value_bytes(row.get_ref(1)?))),
+                    |row| Ok((row.get(0)?, optional_value_bytes(row.get_ref(1)?)?)),
                 )
                 .optional()?;
             let header_payload = header
@@ -205,6 +215,9 @@ impl CursorStore {
 
     fn load_state_conversations(&self) -> Result<Vec<Conversation>, AppError> {
         let state = open_readonly(&self.config.state_db)?;
+        if !table_exists(&state, "composerHeaders")? {
+            return self.load_kv_conversations(&state);
+        }
         let workspace_paths = workspace_paths(&self.config.workspace_storage);
         let mut statement = state.prepare(
             "SELECT composerId,workspaceId,COALESCE(lastUpdatedAt,createdAt,0),\
@@ -217,7 +230,7 @@ impl CursorStore {
                 row.get::<_, Option<String>>(1)?,
                 row.get::<_, i64>(2)?,
                 row.get::<_, i64>(3)? != 0,
-                optional_value_bytes(row.get_ref(4)?),
+                optional_value_bytes(row.get_ref(4)?)?,
             ))
         })?;
         let mut result = Vec::new();
@@ -230,9 +243,10 @@ impl CursorStore {
                 .query_row(
                     "SELECT value FROM cursorDiskKV WHERE key=?1",
                     params![format!("composerData:{id}")],
-                    |row| value_bytes(row.get_ref(0)?),
+                    |row| optional_value_bytes(row.get_ref(0)?),
                 )
-                .optional()?;
+                .optional()?
+                .flatten();
             let payload = raw
                 .as_deref()
                 .and_then(|bytes| serde_json::from_slice::<Value>(bytes).ok());
@@ -269,6 +283,84 @@ impl CursorStore {
                 preview,
             });
         }
+        Ok(result)
+    }
+
+    fn load_kv_conversations(&self, state: &Connection) -> Result<Vec<Conversation>, AppError> {
+        let workspace_paths = workspace_paths(&self.config.workspace_storage);
+        let mut statement = state.prepare(
+            "SELECT key,value FROM cursorDiskKV \
+             WHERE substr(key,1,length('composerData:'))='composerData:' ORDER BY key",
+        )?;
+        let mut rows = statement.query([])?;
+        let mut child_ids = BTreeSet::new();
+        let mut result = Vec::new();
+        while let Some(row) = rows.next()? {
+            let key: String = row.get(0)?;
+            let Some(id) = key.strip_prefix("composerData:").filter(|id| valid_id(id)) else {
+                continue;
+            };
+            let raw = optional_value_bytes(row.get_ref(1)?)?;
+            let payload = raw
+                .as_deref()
+                .and_then(|bytes| serde_json::from_slice::<Value>(bytes).ok());
+            if let Some(payload) = &payload {
+                for field in ["subComposerIds", "subagentComposerIds"] {
+                    child_ids.extend(
+                        payload
+                            .get(field)
+                            .and_then(Value::as_array)
+                            .into_iter()
+                            .flatten()
+                            .filter_map(Value::as_str)
+                            .filter(|id| valid_id(id))
+                            .map(str::to_string),
+                    );
+                }
+            }
+            let workspace = infer_workspace(
+                state,
+                id,
+                payload.as_ref(),
+                None,
+                None,
+                &workspace_paths,
+                &self.config.projects_root,
+            )?;
+            let title = payload
+                .as_ref()
+                .and_then(conversation_title)
+                .unwrap_or_else(|| "未命名对话".into());
+            let updated_at = payload
+                .as_ref()
+                .and_then(conversation_timestamp)
+                .unwrap_or_default();
+            let archived = payload
+                .as_ref()
+                .and_then(|value| json_bool(value, "isArchived"))
+                .unwrap_or(false);
+            let preview = payload
+                .as_ref()
+                .map(|value| conversation_preview(value, self.config.max_preview_chars))
+                .unwrap_or_default();
+            result.push(Conversation {
+                id: id.to_string(),
+                logical_bytes: raw.as_ref().map_or(0, |value| value.len() as u64),
+                title,
+                updated_at,
+                source: "state.vscdb".into(),
+                archived,
+                workspace,
+                preview,
+            });
+        }
+        result.retain(|conversation| !child_ids.contains(&conversation.id));
+        result.sort_by(|left, right| {
+            right
+                .updated_at
+                .cmp(&left.updated_at)
+                .then_with(|| left.id.cmp(&right.id))
+        });
         Ok(result)
     }
 
@@ -314,6 +406,7 @@ impl CursorStore {
             .then(|| open_readonly(&self.config.search_db))
             .transpose()?;
         let state = open_readonly(&self.config.state_db)?;
+        let has_headers = table_exists(&state, "composerHeaders")?;
         let owned = owned_ids(&state, &requested)?;
         let mut hasher = std::collections::hash_map::DefaultHasher::new();
         requested.hash(&mut hasher);
@@ -380,13 +473,15 @@ impl CursorStore {
         impact.unknown_keys = unknown.len();
 
         for id in &owned {
-            hash_query(
-                &state,
-                "SELECT composerId,workspaceId,createdAt,lastUpdatedAt,isArchived,isSubagent,recency,checkpointAt,value FROM composerHeaders WHERE composerId=?1",
-                id,
-                &mut hasher,
-                &mut impact.headers,
-            )?;
+            if has_headers {
+                hash_query(
+                    &state,
+                    "SELECT composerId,workspaceId,createdAt,lastUpdatedAt,isArchived,isSubagent,recency,checkpointAt,value FROM composerHeaders WHERE composerId=?1",
+                    id,
+                    &mut hasher,
+                    &mut impact.headers,
+                )?;
+            }
             if let Some(raw) = composer_value(&state, id)?
                 && let Ok(payload) = serde_json::from_slice::<Value>(&raw)
                 && let Some(path) = workspace_path(&payload)
@@ -494,7 +589,7 @@ impl CursorStore {
         }
 
         let verified = fresh
-            .conversation_ids
+            .owned_ids
             .iter()
             .all(|id| !self.conversation_exists(id).unwrap_or(true));
         if !verified {
@@ -525,6 +620,7 @@ impl CursorStore {
         )?;
         state.busy_timeout(Duration::from_secs(1))?;
         let has_search = self.config.search_db.is_file();
+        let has_headers = table_exists(&state, "composerHeaders")?;
         if has_search {
             state.execute(
                 "ATTACH DATABASE ?1 AS search",
@@ -542,10 +638,12 @@ impl CursorStore {
                 for key in keys {
                     state.execute("DELETE FROM ItemTable WHERE key=?1", params![key])?;
                 }
-                state.execute(
-                    "DELETE FROM composerHeaders WHERE composerId=?1",
-                    params![id],
-                )?;
+                if has_headers {
+                    state.execute(
+                        "DELETE FROM composerHeaders WHERE composerId=?1",
+                        params![id],
+                    )?;
+                }
 
                 if has_search {
                     let mut rowids = Vec::new();
@@ -569,17 +667,23 @@ impl CursorStore {
                     state.execute("DELETE FROM search.conversations WHERE id=?1", params![id])?;
                 }
             }
-            for id in &plan.conversation_ids {
+            for id in &plan.owned_ids {
                 let remaining: i64 = if has_search {
                     state.query_row(
                         "SELECT count(*) FROM search.conversations WHERE id=?1",
                         params![id],
                         |row| row.get(0),
                     )?
-                } else {
+                } else if has_headers {
                     state.query_row(
                         "SELECT count(*) FROM composerHeaders WHERE composerId=?1",
                         params![id],
+                        |row| row.get(0),
+                    )?
+                } else {
+                    state.query_row(
+                        "SELECT count(*) FROM cursorDiskKV WHERE key=?1",
+                        params![format!("composerData:{id}")],
                         |row| row.get(0),
                     )?
                 };
@@ -617,11 +721,19 @@ impl CursorStore {
             Ok(conversation_exists(&search, id)?)
         } else {
             let state = open_readonly(&self.config.state_db)?;
-            let count: i64 = state.query_row(
-                "SELECT count(*) FROM composerHeaders WHERE composerId=?1",
-                params![id],
-                |row| row.get(0),
-            )?;
+            let count: i64 = if table_exists(&state, "composerHeaders")? {
+                state.query_row(
+                    "SELECT count(*) FROM composerHeaders WHERE composerId=?1",
+                    params![id],
+                    |row| row.get(0),
+                )?
+            } else {
+                state.query_row(
+                    "SELECT count(*) FROM cursorDiskKV WHERE key=?1",
+                    params![format!("composerData:{id}")],
+                    |row| row.get(0),
+                )?
+            };
             Ok(count != 0)
         }
     }
@@ -680,6 +792,17 @@ fn open_readonly(path: &Path) -> Result<Connection, AppError> {
     connection.busy_timeout(Duration::from_secs(1))?;
     connection.execute_batch("PRAGMA query_only=ON")?;
     Ok(connection)
+}
+
+fn table_exists(connection: &Connection, table: &str) -> Result<bool, rusqlite::Error> {
+    Ok(connection
+        .query_row(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name=?1",
+            params![table],
+            |_| Ok(()),
+        )
+        .optional()?
+        .is_some())
 }
 
 fn check_columns(
@@ -905,6 +1028,32 @@ fn conversation_title(value: &Value) -> Option<String> {
         .map(|title| title.chars().take(200).collect())
 }
 
+fn conversation_timestamp(value: &Value) -> Option<i64> {
+    ["lastUpdatedAt", "updatedAt", "createdAt"]
+        .into_iter()
+        .find_map(|key| json_i64(value, key))
+}
+
+fn json_i64(value: &Value, key: &str) -> Option<i64> {
+    let value = value.get(key)?;
+    value
+        .as_i64()
+        .or_else(|| value.as_u64().and_then(|value| i64::try_from(value).ok()))
+        .or_else(|| value.as_str().and_then(|value| value.parse().ok()))
+}
+
+fn json_bool(value: &Value, key: &str) -> Option<bool> {
+    let value = value.get(key)?;
+    value
+        .as_bool()
+        .or_else(|| value.as_i64().map(|value| value != 0))
+        .or_else(|| match value.as_str()? {
+            "true" | "1" => Some(true),
+            "false" | "0" => Some(false),
+            _ => None,
+        })
+}
+
 fn conversation_preview(value: &Value, max_chars: usize) -> String {
     fn visit(value: &Value, output: &mut Vec<String>) {
         if output.len() >= 4 {
@@ -947,6 +1096,7 @@ fn owned_ids(
     state: &Connection,
     requested: &BTreeSet<String>,
 ) -> Result<BTreeSet<String>, AppError> {
+    let kv_only = !table_exists(state, "composerHeaders")?;
     let mut owned = requested.clone();
     let mut queue: VecDeque<String> = requested.iter().cloned().collect();
     while let Some(id) = queue.pop_front() {
@@ -963,6 +1113,11 @@ fn owned_ids(
                 "composerData:{id} 不是有效 JSON"
             )));
         };
+        if kv_only && value.get("composerId").and_then(Value::as_str) != Some(id.as_str()) {
+            return Err(AppError::Planning(format!(
+                "composerData:{id} 的内部标识与键不一致"
+            )));
+        }
         for field in ["subComposerIds", "subagentComposerIds"] {
             if let Some(values) = value.get(field).and_then(Value::as_array) {
                 for child in values
@@ -985,26 +1140,21 @@ fn composer_value(state: &Connection, id: &str) -> Result<Option<Vec<u8>>, AppEr
         .query_row(
             "SELECT value FROM cursorDiskKV WHERE key=?1",
             params![format!("composerData:{id}")],
-            |row| value_bytes(row.get_ref(0)?),
+            |row| optional_value_bytes(row.get_ref(0)?),
         )
-        .optional()?)
+        .optional()?
+        .flatten())
 }
 
-fn value_bytes(value: ValueRef<'_>) -> Result<Vec<u8>, rusqlite::Error> {
+fn optional_value_bytes(value: ValueRef<'_>) -> Result<Option<Vec<u8>>, rusqlite::Error> {
     match value {
-        ValueRef::Text(value) | ValueRef::Blob(value) => Ok(value.to_vec()),
+        ValueRef::Null => Ok(None),
+        ValueRef::Text(value) | ValueRef::Blob(value) => Ok(Some(value.to_vec())),
         _ => Err(rusqlite::Error::InvalidColumnType(
             0,
             "value".into(),
             value.data_type(),
         )),
-    }
-}
-
-fn optional_value_bytes(value: ValueRef<'_>) -> Option<Vec<u8>> {
-    match value {
-        ValueRef::Text(value) | ValueRef::Blob(value) => Some(value.to_vec()),
-        _ => None,
     }
 }
 
@@ -1553,6 +1703,52 @@ mod tests {
     }
 
     #[test]
+    fn search_layout_without_headers_remains_unsupported() {
+        let fixture = Fixture::new("search-without-headers");
+        let state = Connection::open(&fixture.config.state_db).unwrap();
+        state.execute_batch("DROP TABLE composerHeaders").unwrap();
+        drop(state);
+        let store = CursorStore::new(fixture.config.clone());
+
+        let probe = store.probe().unwrap();
+        assert_eq!(probe.state, SchemaState::Unsupported);
+        assert!(
+            probe
+                .diagnostics
+                .iter()
+                .any(|value| value.contains("此组合尚未验证"))
+        );
+        assert!(matches!(
+            store.load_conversations().unwrap_err(),
+            AppError::UnsupportedSchema(_)
+        ));
+        assert!(fixture.transcript.is_dir());
+    }
+
+    #[test]
+    fn null_composer_values_remain_browsable_but_cannot_be_deleted() {
+        let fixture = Fixture::new("null-composer-value");
+        let connection = Connection::open(&fixture.config.state_db).unwrap();
+        connection
+            .execute(
+                "UPDATE cursorDiskKV SET value=NULL WHERE key=?1",
+                params![format!("composerData:{}", fixture.conversation_id)],
+            )
+            .unwrap();
+        drop(connection);
+        let store = CursorStore::new(fixture.config.clone());
+
+        let records = store.load_conversations().unwrap();
+        assert_eq!(records.len(), 1);
+        assert!(records[0].preview.is_empty());
+        let error = store
+            .build_delete_plan(std::slice::from_ref(&fixture.conversation_id))
+            .unwrap_err();
+        assert!(matches!(error, AppError::Planning(_)));
+        assert!(fixture.transcript.is_dir());
+    }
+
+    #[test]
     fn deletes_only_cursor_copy_and_cleans_temporary_recovery_data() {
         let fixture = Fixture::new("delete");
         let store = CursorStore::new(fixture.config.clone());
@@ -1646,6 +1842,114 @@ mod tests {
             .query_row("SELECT count(*) FROM composerHeaders", [], |row| row.get(0))
             .unwrap();
         assert_eq!(remaining, 0);
+    }
+
+    #[test]
+    fn kv_only_layout_loads_roots_and_deletes_owned_children() {
+        let fixture = Fixture::new("kv-only");
+        fs::remove_file(&fixture.config.search_db).unwrap();
+        let child_id = format!("{}-child", fixture.conversation_id);
+        let parent_payload = serde_json::json!({
+            "composerId": fixture.conversation_id,
+            "title": "KV-only 对话",
+            "createdAt": 1721000000000_i64,
+            "isArchived": false,
+            "subComposerIds": [&child_id],
+            "workspaceIdentifier": {
+                "id": "workspace-id",
+                "uri": {"fsPath": fixture.protected_project.to_string_lossy()}
+            },
+            "messages": [{"role": "user", "text": "仅用于合成测试"}]
+        })
+        .to_string();
+        let child_payload = serde_json::json!({
+            "composerId": child_id,
+            "createdAt": 1720999999999_i64,
+            "subComposerIds": []
+        })
+        .to_string();
+        let state = Connection::open(&fixture.config.state_db).unwrap();
+        state.execute_batch("DROP TABLE composerHeaders").unwrap();
+        state
+            .execute(
+                "UPDATE cursorDiskKV SET value=?1 WHERE key=?2",
+                params![
+                    parent_payload,
+                    format!("composerData:{}", fixture.conversation_id)
+                ],
+            )
+            .unwrap();
+        state
+            .execute(
+                "INSERT INTO cursorDiskKV VALUES (?1,?2)",
+                params![format!("composerData:{child_id}"), child_payload],
+            )
+            .unwrap();
+        drop(state);
+        let store = CursorStore::new(fixture.config.clone());
+
+        let probe = store.probe().unwrap();
+        assert_eq!(probe.state, SchemaState::Supported);
+        assert!(
+            probe
+                .diagnostics
+                .iter()
+                .any(|value| value.contains("KV-only"))
+        );
+        let records = store.load_conversations().unwrap();
+        assert_eq!(records.len(), 1);
+        assert_eq!(records[0].title, "KV-only 对话");
+        assert_eq!(records[0].updated_at, 1721000000000);
+
+        let plan = store
+            .build_delete_plan(std::slice::from_ref(&fixture.conversation_id))
+            .unwrap();
+        assert_eq!(plan.owned_ids.len(), 2);
+        assert_eq!(plan.impact.headers, 0);
+        let receipt = store.execute_delete(&plan).unwrap();
+        assert!(receipt.verified);
+        assert!(!fixture.transcript.exists());
+        assert_eq!(
+            fs::read_to_string(fixture.protected_project.join("keep.txt")).unwrap(),
+            "keep"
+        );
+        let state = Connection::open(&fixture.config.state_db).unwrap();
+        let remaining: i64 = state
+            .query_row(
+                "SELECT count(*) FROM cursorDiskKV WHERE key LIKE 'composerData:%'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(remaining, 0);
+    }
+
+    #[test]
+    fn kv_only_null_composer_remains_visible_but_cannot_be_deleted() {
+        let fixture = Fixture::new("kv-only-null");
+        fs::remove_file(&fixture.config.search_db).unwrap();
+        let state = Connection::open(&fixture.config.state_db).unwrap();
+        state.execute_batch("DROP TABLE composerHeaders").unwrap();
+        state
+            .execute(
+                "UPDATE cursorDiskKV SET value=NULL WHERE key=?1",
+                params![format!("composerData:{}", fixture.conversation_id)],
+            )
+            .unwrap();
+        drop(state);
+        let store = CursorStore::new(fixture.config.clone());
+
+        assert!(store.probe().unwrap().supported());
+        let records = store.load_conversations().unwrap();
+        assert_eq!(records.len(), 1);
+        assert!(records[0].preview.is_empty());
+        assert!(matches!(
+            store
+                .build_delete_plan(std::slice::from_ref(&fixture.conversation_id))
+                .unwrap_err(),
+            AppError::Planning(_)
+        ));
+        assert!(fixture.transcript.is_dir());
     }
 
     #[test]
