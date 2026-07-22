@@ -75,9 +75,10 @@ jobs:
         shell: bash
         run: |
           package_version="$(node -p "require('./npm/package.json').version")"
+          package_tarball="$(find release -maxdepth 1 -type f -name '*.tgz')"
           if [[ "${package_version}" == *-* ]]; then
             npm_tag="next"
           else
             npm_tag="latest"
           fi
-          npm publish "$(find release -maxdepth 1 -type f -name '*.tgz')" --tag "${npm_tag}" --provenance --access public
+          npm publish "./${package_tarball}" --tag "${npm_tag}" --provenance --access public

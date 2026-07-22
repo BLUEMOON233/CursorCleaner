@@ -75,7 +75,7 @@ jobs:
           New-Item -ItemType Directory -Force dist | Out-Null
           Copy-Item "target/release/${{ matrix.executable }}" "dist/${{ matrix.executable }}"
           Compress-Archive -Path "dist/${{ matrix.executable }}" -DestinationPath "cursor-cleaner-${env:GITHUB_REF_NAME}-${{ matrix.target }}.zip"
-      - uses: actions/upload-artifact@v6
+      - uses: actions/upload-artifact@v7
         with:
           name: native-${{ matrix.target }}
           path: |
@@ -91,11 +91,11 @@ jobs:
       contents: write
     steps:
       - uses: actions/checkout@v6
-      - uses: actions/download-artifact@v6
+      - uses: actions/download-artifact@v8
         with:
           pattern: native-*
           path: artifacts
-      - uses: actions/download-artifact@v6
+      - uses: actions/download-artifact@v8
         with:
           name: npm-package
           path: artifacts/npm-package
@@ -128,7 +128,7 @@ jobs:
         with:
           node-version: 22
           package-manager-cache: false
-      - uses: actions/download-artifact@v6
+      - uses: actions/download-artifact@v8
         with:
           pattern: native-*
           path: artifacts
@@ -145,7 +145,7 @@ jobs:
         run: |
           node --test test/cli.test.js
           npm pack
-      - uses: actions/upload-artifact@v6
+      - uses: actions/upload-artifact@v7
         with:
           name: npm-package
           path: npm/*.tgz
