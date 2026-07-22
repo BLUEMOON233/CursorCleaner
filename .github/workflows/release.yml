@@ -1,0 +1,146 @@
+name: Build prerelease
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  verify-release:
+    name: Verify release identity
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 24
+          package-manager-cache: false
+      - name: Verify tag, versions, and package name
+        shell: bash
+        env:
+          NPM_PACKAGE_NAME: ${{ vars.NPM_PACKAGE_NAME }}
+        run: |
+          cargo_version="$(sed -n 's/^version = "\([^"]*\)"/\1/p' Cargo.toml | head -n 1)"
+          npm_version="$(node -p "require('./npm/package.json').version")"
+          npm_name="$(node -p "require('./npm/package.json').name")"
+          test "${GITHUB_REF_NAME}" = "v${cargo_version}"
+          test "${npm_version}" = "${cargo_version}"
+          test -n "${NPM_PACKAGE_NAME}"
+          test "${npm_name}" = "${NPM_PACKAGE_NAME}"
+
+  build:
+    name: Build ${{ matrix.target }}
+    needs: verify-release
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: aarch64-apple-darwin
+            runner: macos-latest
+            executable: cursor-cleaner
+            archive: tar.gz
+          - target: x86_64-apple-darwin
+            runner: macos-15-intel
+            executable: cursor-cleaner
+            archive: tar.gz
+          - target: x86_64-pc-windows-msvc
+            runner: windows-2025
+            executable: cursor-cleaner.exe
+            archive: zip
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v6
+      - name: Install Rust stable
+        run: rustup update stable
+      - name: Build
+        run: cargo build --locked --release -p cursor-cleaner
+      - name: Stage Unix artifact
+        if: runner.os != 'Windows'
+        shell: bash
+        run: |
+          mkdir -p dist
+          cp target/release/${{ matrix.executable }} dist/
+          tar -C dist -czf cursor-cleaner-${GITHUB_REF_NAME}-${{ matrix.target }}.tar.gz ${{ matrix.executable }}
+      - name: Stage Windows artifact
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force dist | Out-Null
+          Copy-Item "target/release/${{ matrix.executable }}" "dist/${{ matrix.executable }}"
+          Compress-Archive -Path "dist/${{ matrix.executable }}" -DestinationPath "cursor-cleaner-${env:GITHUB_REF_NAME}-${{ matrix.target }}.zip"
+      - uses: actions/upload-artifact@v6
+        with:
+          name: native-${{ matrix.target }}
+          path: |
+            cursor-cleaner-${{ github.ref_name }}-${{ matrix.target }}.${{ matrix.archive }}
+            dist/${{ matrix.executable }}
+          if-no-files-found: error
+
+  publish-github-prerelease:
+    name: Publish GitHub prerelease
+    needs: [build, package-npm]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/download-artifact@v6
+        with:
+          pattern: native-*
+          path: artifacts
+      - uses: actions/download-artifact@v6
+        with:
+          name: npm-package
+          path: artifacts/npm-package
+      - name: Collect archives and checksums
+        shell: bash
+        run: |
+          mkdir -p release
+          find artifacts -type f \( -name '*.tar.gz' -o -name '*.zip' -o -name '*.tgz' \) -exec cp {} release/ \;
+          test "$(find release -maxdepth 1 -type f | wc -l | tr -d ' ')" = "4"
+          cd release
+          sha256sum -- * > SHA256SUMS
+      - name: Create prerelease
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release create "${GITHUB_REF_NAME}" release/* --prerelease --generate-notes --verify-tag
+
+  package-npm:
+    name: Assemble npm package
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 22
+          package-manager-cache: false
+      - uses: actions/download-artifact@v6
+        with:
+          pattern: native-*
+          path: artifacts
+      - name: Assemble native binaries
+        shell: bash
+        run: |
+          mkdir -p npm/vendor/darwin-arm64 npm/vendor/darwin-x64 npm/vendor/win32-x64
+          cp artifacts/native-aarch64-apple-darwin/dist/cursor-cleaner npm/vendor/darwin-arm64/
+          cp artifacts/native-x86_64-apple-darwin/dist/cursor-cleaner npm/vendor/darwin-x64/
+          cp artifacts/native-x86_64-pc-windows-msvc/dist/cursor-cleaner.exe npm/vendor/win32-x64/
+          chmod +x npm/vendor/darwin-*/cursor-cleaner npm/bin/cli.js
+      - name: Verify and pack
+        working-directory: npm
+        run: |
+          node --test test/cli.test.js
+          npm pack
+      - uses: actions/upload-artifact@v6
+        with:
+          name: npm-package
+          path: npm/*.tgz
+          if-no-files-found: error

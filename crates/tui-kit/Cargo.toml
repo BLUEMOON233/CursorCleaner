@@ -1,0 +1,13 @@
+[package]
+name = "tui-kit"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+description = "Shared terminal UI components for CursorCleaner"
+publish = false
+
+[dependencies]
+crossterm.workspace = true
+ratatui.workspace = true

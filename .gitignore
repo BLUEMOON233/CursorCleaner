@@ -1,0 +1,27 @@
+/target/
+/.idea/
+/.vscode/
+.DS_Store
+*.log
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+
+# Never commit local Cursor data or generated diagnostic reports.
+*.db
+*.db-wal
+*.db-shm
+*.sqlite
+*.sqlite3
+*.vscdb
+*.vscdb-wal
+*.vscdb-shm
+cursor-cleaner-windows-diagnostics.json
+config.local.toml
+
+# Release binaries are assembled by CI and must not be committed.
+/npm/vendor/*/cursor-cleaner
+/npm/vendor/*/cursor-cleaner.exe
+/npm/*.tgz

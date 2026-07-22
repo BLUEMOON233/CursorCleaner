@@ -1,0 +1,16 @@
+# 默认会按操作系统自动发现路径；只有使用便携版或自定义数据目录时才需要此文件。
+# 以下为 macOS 示例：
+search_db = "/Users/you/Library/Application Support/Cursor/User/globalStorage/conversation-search.db"
+state_db = "/Users/you/Library/Application Support/Cursor/User/globalStorage/state.vscdb"
+workspace_storage = "/Users/you/Library/Application Support/Cursor/User/workspaceStorage"
+projects_root = "/Users/you/.cursor/projects"
+# 可选：默认使用系统临时目录，例如 macOS 的 $TMPDIR/cursor-cleaner-recovery
+# recovery_root = "/tmp/cursor-cleaner-recovery"
+max_preview_chars = 800
+
+# Windows 自定义路径请复制为另一份配置并使用 TOML literal string，例如：
+# search_db = 'C:\Users\you\AppData\Roaming\Cursor\User\globalStorage\conversation-search.db'
+# state_db = 'C:\Users\you\AppData\Roaming\Cursor\User\globalStorage\state.vscdb'
+# workspace_storage = 'C:\Users\you\AppData\Roaming\Cursor\User\workspaceStorage'
+# projects_root = 'C:\Users\you\.cursor\projects'
+# recovery_root = 'C:\Users\you\AppData\Local\Temp\cursor-cleaner-recovery'

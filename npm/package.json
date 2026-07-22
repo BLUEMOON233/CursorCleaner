@@ -1,0 +1,38 @@
+{
+  "name": "@bluemoon233/cursor-cleaner",
+  "version": "0.1.0-alpha.1",
+  "description": "Native Cursor conversation manager TUI for macOS and Windows",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/BLUEMOON233/CursorCleaner.git"
+  },
+  "homepage": "https://github.com/BLUEMOON233/CursorCleaner#readme",
+  "bugs": {
+    "url": "https://github.com/BLUEMOON233/CursorCleaner/issues"
+  },
+  "type": "module",
+  "bin": {
+    "cursor-cleaner": "bin/cli.js"
+  },
+  "files": [
+    "bin",
+    "vendor",
+    "README.md"
+  ],
+  "engines": {
+    "node": ">=18"
+  },
+  "os": [
+    "darwin",
+    "win32"
+  ],
+  "cpu": [
+    "x64",
+    "arm64"
+  ],
+  "publishConfig": {
+    "access": "public",
+    "provenance": true
+  }
+}

@@ -1,0 +1,76 @@
+name: Publish npm package
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing release tag, for example v0.1.0-alpha.1
+        required: true
+        type: string
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    environment: npm
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ inputs.tag }}
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 24
+          registry-url: https://registry.npmjs.org
+          package-manager-cache: false
+      - name: Verify trusted publishing toolchain
+        shell: bash
+        run: |
+          node -e 'const [major, minor] = process.versions.node.split(".").map(Number); if (major < 22 || (major === 22 && minor < 14)) process.exit(1)'
+          node -e 'const [major, minor, patch] = require("child_process").execFileSync("npm", ["--version"], { encoding: "utf8" }).trim().split(".").map(Number); if (major < 11 || (major === 11 && (minor < 5 || (minor === 5 && patch < 1)))) process.exit(1)'
+      - name: Download release binaries
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ inputs.tag }}
+        shell: bash
+        run: |
+          [[ "${RELEASE_TAG}" =~ ^v[0-9]+\.[0-9]+\.[0-9]+-[0-9A-Za-z.-]+$ ]]
+          test "$(git rev-parse HEAD)" = "$(git rev-parse "refs/tags/${RELEASE_TAG}^{commit}")"
+          mkdir -p release npm/vendor/darwin-arm64 npm/vendor/darwin-x64 npm/vendor/win32-x64
+          gh release download "${RELEASE_TAG}" --dir release
+          (cd release && sha256sum --strict -c SHA256SUMS)
+          tar -xzf "release/cursor-cleaner-${RELEASE_TAG}-aarch64-apple-darwin.tar.gz" -C npm/vendor/darwin-arm64
+          tar -xzf "release/cursor-cleaner-${RELEASE_TAG}-x86_64-apple-darwin.tar.gz" -C npm/vendor/darwin-x64
+          unzip -j "release/cursor-cleaner-${RELEASE_TAG}-x86_64-pc-windows-msvc.zip" -d npm/vendor/win32-x64
+          chmod +x npm/vendor/darwin-*/cursor-cleaner npm/bin/cli.js
+          test "$(find release -maxdepth 1 -type f -name '*.tgz' | wc -l | tr -d ' ')" = "1"
+          mkdir -p release/npm-package
+          tar -xzf "$(find release -maxdepth 1 -type f -name '*.tgz')" -C release/npm-package
+          cmp npm/vendor/darwin-arm64/cursor-cleaner release/npm-package/package/vendor/darwin-arm64/cursor-cleaner
+          cmp npm/vendor/darwin-x64/cursor-cleaner release/npm-package/package/vendor/darwin-x64/cursor-cleaner
+          cmp npm/vendor/win32-x64/cursor-cleaner.exe release/npm-package/package/vendor/win32-x64/cursor-cleaner.exe
+          cmp npm/bin/cli.js release/npm-package/package/bin/cli.js
+          cmp npm/package.json release/npm-package/package/package.json
+      - name: Verify package identity
+        shell: bash
+        env:
+          NPM_PACKAGE_NAME: ${{ vars.NPM_PACKAGE_NAME }}
+          RELEASE_TAG: ${{ inputs.tag }}
+        run: |
+          package_root="release/npm-package/package"
+          test -n "${NPM_PACKAGE_NAME}"
+          test "$(node -p "require('./npm/package.json').name")" = "${NPM_PACKAGE_NAME}"
+          test "$(node -p "require('./' + process.argv[1] + '/package.json').name" "${package_root}")" = "${NPM_PACKAGE_NAME}"
+          test "${RELEASE_TAG}" = "v$(node -p "require('./npm/package.json').version")"
+          test "${RELEASE_TAG}" = "v$(node -p "require('./' + process.argv[1] + '/package.json').version" "${package_root}")"
+          node --test npm/test/cli.test.js
+          (cd npm && npm pack --dry-run)
+      - name: Publish prerelease
+        env:
+          # Required only to bootstrap the package before npm trusted publishing
+          # can be configured. Remove the secret after OIDC succeeds.
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        shell: bash
+        run: npm publish "$(find release -maxdepth 1 -type f -name '*.tgz')" --tag next --provenance --access public

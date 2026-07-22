@@ -1,0 +1,22 @@
+[package]
+name = "cursor-cleaner"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+description = "Cursor local conversation manager TUI for macOS and Windows"
+readme = "README.md"
+publish = false
+
+[dependencies]
+chrono.workspace = true
+crossterm.workspace = true
+ratatui.workspace = true
+rusqlite.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+tokio.workspace = true
+toml.workspace = true
+tui-kit = { path = "../../crates/tui-kit" }
