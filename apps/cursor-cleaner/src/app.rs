@@ -507,10 +507,14 @@ mod tests {
     #[test]
     fn groups_by_workspace_and_limits_record_list() {
         let mut app = App::new(Config::default());
+        #[cfg(target_os = "windows")]
+        let (workspace_a, workspace_b) = (r"C:\项目\甲", r"C:\项目\乙");
+        #[cfg(not(target_os = "windows"))]
+        let (workspace_a, workspace_b) = ("/项目/甲", "/项目/乙");
         for (id, workspace, updated_at) in [
-            ("id-a", "/项目/甲", 10),
-            ("id-b", "/项目/乙", 30),
-            ("id-c", "/项目/甲", 20),
+            ("id-a", workspace_a, 10),
+            ("id-b", workspace_b, 30),
+            ("id-c", workspace_a, 20),
             ("id-d", "无法识别工作目录", 40),
         ] {
             app.records.push(Conversation {
@@ -525,12 +529,12 @@ mod tests {
             });
         }
         let groups = app.workspace_groups();
-        assert_eq!(groups[0].label, "/项目/乙");
-        assert_eq!(groups[1].label, "/项目/甲");
+        assert_eq!(groups[0].label, workspace_b);
+        assert_eq!(groups[1].label, workspace_a);
         assert_eq!(groups[1].conversations, 2);
         assert_eq!(groups[2].label, "无法识别工作目录");
 
-        app.active_workspace = Some("/项目/甲".into());
+        app.active_workspace = Some(workspace_a.into());
         assert_eq!(app.filtered_indices(), vec![0, 2]);
     }
 }
