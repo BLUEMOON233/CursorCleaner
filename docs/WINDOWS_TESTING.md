@@ -41,7 +41,7 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\windows-cursor
 建议反馈模板：
 
 ```text
-CursorCleaner: v0.1.0
+CursorCleaner: v0.1.1
 Windows / arch:
 Cursor version:
 Terminal / PowerShell:

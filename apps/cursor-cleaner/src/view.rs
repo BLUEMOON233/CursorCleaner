@@ -73,7 +73,7 @@ fn page_meta(app: &App) -> (&'static str, &'static str) {
         ),
         Screen::Records => (
             "记录列表与详情",
-            "↑↓/jk 移动 · Space 多选 · / 搜索 · F 过滤 · Enter 详情 · X 清理",
+            "↑↓/jk 移动 · Space 多选 · / 搜索 · F 切换全部/未归档/已归档 · Enter 详情 · X 清理",
         ),
         Screen::Detail => ("记录详情", "↑↓/PgUp/PgDn 滚动 · X 清理 · Esc 返回"),
         Screen::Preflight => ("环境检查", "Enter 生成计划 · R 重试 · Esc 返回"),
@@ -632,7 +632,7 @@ fn error(frame: &mut Frame<'_>, area: Rect, app: &App, theme: Theme) {
 }
 
 fn help(frame: &mut Frame<'_>, area: Rect, theme: Theme) {
-    let text = "↑↓ / jk       移动或滚动\nSpace          多选记录\n/              搜索标题、ID、工作区\nF              过滤全部/未归档/已归档\nEnter          打开主要操作\nX / Delete     进入清理安全流程（不会直接删除）\nEsc            返回\nCtrl+C         安全退出；事务阶段拒绝中断\n?              打开或关闭帮助\n\n流程：环境检查 → 计划 → 影响预览 → 默认取消确认 → 临时回滚快照 → 执行 → 校验 → 回执";
+    let text = "↑↓ / jk       移动或滚动\nSpace          多选记录\n/              搜索标题、ID、工作区\nF              切换全部/未归档/已归档\nEnter          打开主要操作\nX / Delete     进入清理安全流程（不会直接删除）\nEsc            返回\nCtrl+C         安全退出；事务阶段拒绝中断\n?              打开或关闭帮助\n\n流程：环境检查 → 计划 → 影响预览 → 默认取消确认 → 临时回滚快照 → 执行 → 校验 → 回执";
     frame.render_widget(
         Paragraph::new(text)
             .wrap(Wrap { trim: false })

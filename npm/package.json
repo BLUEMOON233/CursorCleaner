@@ -1,6 +1,6 @@
 {
   "name": "@bluemoon233/cursor-cleaner",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Native Cursor conversation manager TUI for macOS and Windows",
   "license": "MIT",
   "repository": {
